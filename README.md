@@ -1,60 +1,41 @@
-# Warehouse Order Rescue
+# App Stopper
 
-A real-time warehouse exception investigator prototype. It watches warehouse events, identifies an outbound order at risk of missing its carrier cutoff, shows the evidence behind that alert, and suggests a supervisor-reviewed next step.
+App Stopper is a local-first self-management tool for setting time budgets on apps a person chooses. It warns as a budget runs low, blocks the selected app when the budget is used, and restores access at the configured reset time.
 
-## Current prototype
+The project targets **Android, iOS/iPadOS, and Windows**. Each operating system needs its own native usage-monitoring and enforcement adapter; a web page alone cannot restrict other apps. The first version keeps rules and usage totals on the device and does not require an account or cloud service.
 
-- A versioned event contract shared by the simulator, API, and future WMS adapters.
-- A local FastAPI service that validates and stores events in an append-only SQLite event log.
-- A deterministic, explainable risk rule for a short-picked order with reserve stock and no replenishment task.
-- A 30-second deadline re-check so risk can rise as a carrier cutoff approaches, even if no new warehouse event arrives.
-- A small dashboard that receives case updates over Server-Sent Events (SSE).
-- A repeatable demo scenario; every generated record is synthetic and marked as coming from `simulator`.
+## First release scope
 
-This proves the flow with simulated data. It does not prove that a specific warehouse's cutoffs, inventory semantics, or recommended actions are correct. Those need to be confirmed with a warehouse partner before operational use. The prototype does not connect to or write to any WMS.
+- User selects supported apps on their own device.
+- Each app has an allowance, warning thresholds, and a reset rule.
+- Usage counts while the selected app is in the foreground and the device is in use.
+- Warnings are issued at configured remaining-time thresholds (initial proposal: 30, 20, and 10 minutes).
+- When the allowance is exhausted, the platform adapter blocks access until the rule resets.
+- Essential system functions are excluded, and the app explains every permission it requests.
+- Rules, counters, and reset state persist locally across restarts.
 
-## Run locally on Windows
+App Stopper is a self-control aid, not a tamper-proof security product. A device owner may be able to disable or remove a self-management app, and enforcement strength differs by platform. See [platform feasibility](docs/platform-feasibility.md) before promising identical behavior everywhere.
 
-From this folder, create and activate a virtual environment, then install the backend dependencies:
+## Repository layout
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
+```text
+apps/
+  android/       Kotlin client and Android enforcement adapter
+  ios/           Swift client and Screen Time extensions
+  windows/       .NET desktop client and Windows adapter
+contracts/       Versioned, platform-neutral rule contract
+docs/            Product scope, architecture, platform notes, team workflow
 ```
 
-Start the application:
+## Development status
 
-```powershell
-uvicorn warehouse_rescue.main:app --app-dir backend --reload
-```
+This repository is at the product-foundation stage after a scope pivot. The warehouse simulator, warehouse API, and warehouse dashboard have been removed from the active project. Next, build a small feasibility spike on each target OS before committing to full app screens: select one app, measure a short allowance, issue a warning, apply a block, and restore access at reset.
 
-Open <http://127.0.0.1:8000>, then choose **Run demo scenario**. The case should appear as the simulated order events arrive. API documentation is at <http://127.0.0.1:8000/docs>.
+## Documents
 
-Run the rule tests in another terminal with the virtual environment active:
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
-The SQLite database is created at `backend/warehouse_rescue.db`. Remove that file to reset the local demo history.
-
-## Team workflow
-
-Keep one shared repository and agree on the event contract before parallel work. The initial branch layout is:
-
-- `main` — stable, integrated version; merge reviewed pull requests here.
-- `team/lephallo1` — your branch for the event contract, simulator, and ingestion/store integration.
-- `team/rexlesenyeho` — the collaborator's branch for risk/case lifecycle and the supervisor dashboard.
-
-Invite `Rexlesenyeho` to the GitHub repository with write access. Each person should push only to their own branch and open pull requests to `main`; avoid direct pushes to `main`. Keep API and event contract changes explicit so work done on separate machines can be integrated cleanly. Coordinate contract changes together before either branch depends on them.
-
-## Next steps
-
-1. Agree as a team on the first scenario and event fields in `contracts/warehouse-event.v1.schema.json`.
-2. Run the same simulator locally and confirm all three machines show the same case.
-3. Add replay, idempotency, and case lifecycle coverage.
-4. Replace SQLite with PostgreSQL and add a background re-evaluation worker when the team is ready to deploy the prototype collaboratively.
-5. Build a read-only adapter for a partner's WMS only after agreeing on field mappings, access, and operational rules.
-
-See [`docs/architecture.md`](docs/architecture.md) and [`docs/team-integration.md`](docs/team-integration.md).
+- [Product brief](docs/product-brief.md)
+- [Architecture and runtime workflow](docs/architecture.md)
+- [Platform feasibility and constraints](docs/platform-feasibility.md)
+- [Team workflow and proposed ownership](docs/team-workflow.md)
+- [App rule v1 contract](contracts/app-rule.v1.schema.json)
+- [Example daily rule](examples/app-rule.daily.example.json)

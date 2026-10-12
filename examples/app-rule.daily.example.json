@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "rule_id": "7c3102c1-3d47-4d23-8eb6-09cb507d543f",
+  "target": {
+    "platform": "android",
+    "selection_ref": "device-local-selection-example",
+    "display_name": "Example social app"
+  },
+  "allowance_seconds": 3600,
+  "warning_thresholds_seconds": [1800, 1200, 600],
+  "reset_policy": {
+    "mode": "daily",
+    "local_time": "04:00",
+    "time_zone": "Africa/Johannesburg"
+  },
+  "enabled": true
+}

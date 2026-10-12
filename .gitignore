@@ -1,7 +1,31 @@
+# Local secrets and developer environments
+.env
+.env.*
+!.env.example
+.venv/
+venv/
 __pycache__/
 *.py[cod]
-.venv/
-.env
+.pytest_cache/
+
+# On-device development databases and generated files
 *.db
 *.sqlite3
-.pytest_cache/
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.iml
+
+# Apple / Xcode
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Windows / .NET
+bin/
+obj/
+*.user
+*.suo

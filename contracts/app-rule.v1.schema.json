@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:app-stopper:app-rule:v1",
+  "title": "App Stopper Rule v1",
+  "description": "A local per-app usage allowance and reset policy. Platform selection references are device-local and must not be treated as portable identifiers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "rule_id",
+    "target",
+    "allowance_seconds",
+    "warning_thresholds_seconds",
+    "reset_policy",
+    "enabled"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "rule_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "selection_ref", "display_name"],
+      "properties": {
+        "platform": {
+          "enum": ["android", "ios", "ipados", "windows"]
+        },
+        "selection_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque local reference returned by the platform's app-selection mechanism."
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A local display label; not an enforcement identifier."
+        }
+      }
+    },
+    "allowance_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "warning_thresholds_seconds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "uniqueItems": true,
+      "description": "Remaining-use seconds at which to warn, for example [1800, 1200, 600]. Runtime validation must reject thresholds greater than allowance_seconds."
+    },
+    "reset_policy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "local_time", "time_zone"],
+          "properties": {
+            "mode": {
+              "const": "daily"
+            },
+            "local_time": {
+              "type": "string",
+              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+              "description": "Daily reset time in 24-hour HH:MM format."
+            },
+            "time_zone": {
+              "type": "string",
+              "minLength": 1,
+              "description": "IANA time-zone identifier used to calculate the local reset boundary."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "cooldown_seconds"],
+          "properties": {
+            "mode": {
+              "const": "cooldown"
+            },
+            "cooldown_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2592000,
+              "description": "Elapsed time after the allowance is exhausted before access returns."
+            }
+          }
+        }
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  }
+}
