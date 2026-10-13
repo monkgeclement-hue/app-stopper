@@ -29,7 +29,19 @@ docs/            Product scope, architecture, platform notes, team workflow
 
 ## Development status
 
-This repository is at the product-foundation stage after a scope pivot. The warehouse simulator, warehouse API, and warehouse dashboard have been removed from the active project. Next, build a small feasibility spike on each target OS before committing to full app screens: select one app, measure a short allowance, issue a warning, apply a block, and restore access at reset.
+The first Windows prototype is runnable. It lets a user select a running desktop app, set a daily foreground-use allowance and reset time, receive remaining-time warnings, and see a block notice at the limit. Rules and counters stay on the device. Android and iOS are currently at the platform-plan stage.
+
+Install the [.NET 10 SDK](https://learn.microsoft.com/dotnet/core/install/windows), then run the Windows prototype from the repository root:
+
+```powershell
+dotnet run --project apps/windows/AppStopper.WindowsClient/AppStopper.WindowsClient.csproj
+```
+
+Run the policy smoke checks with:
+
+```powershell
+dotnet run --project apps/windows/tests/AppStopper.Core.SmokeTests/AppStopper.Core.SmokeTests.csproj
+```
 
 ## Documents
 
