@@ -1,5 +1,5 @@
 using System.Text.Json;
-using AppStopper.Core;
+using MindGate.Core;
 
 static void Check(bool condition, string message)
 {
@@ -44,4 +44,4 @@ var cooldownReset = UsageBudgetEngine.Consume(cooldownRule, cooldownBlock.State,
 Check(cooldownReset.CycleReset && cooldownReset.State.UsedSeconds == 5 && !cooldownReset.IsBlocked,
     "A completed cooldown should start a fresh usage cycle.");
 
-Console.WriteLine("All AppStopper.Core smoke checks passed.");
+Console.WriteLine("All MindGate.Core smoke checks passed.");

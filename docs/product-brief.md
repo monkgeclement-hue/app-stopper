@@ -1,4 +1,4 @@
-# App Stopper — Product Brief
+# MindGate — Product Brief
 
 ## Problem
 

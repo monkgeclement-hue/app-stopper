@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace AppStopper.WindowsClient;
+namespace MindGate.WindowsClient;
 
 internal sealed record ForegroundWindow(nint Handle, int ProcessId, string ExecutablePath);
 

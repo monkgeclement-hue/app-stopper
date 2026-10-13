@@ -1,4 +1,4 @@
-namespace AppStopper.WindowsClient;
+namespace MindGate.WindowsClient;
 
 static class Program
 {

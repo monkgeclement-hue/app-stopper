@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../AppStopper.Core/AppStopper.Core.csproj" />
+    <ProjectReference Include="../../MindGate.Core/MindGate.Core.csproj" />
     <Content Include="../../../../examples/app-rule.daily.example.json" Link="app-rule.daily.example.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
