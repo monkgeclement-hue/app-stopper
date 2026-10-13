@@ -2,6 +2,8 @@
 
 MindGate for Windows is built with **C#/.NET**. `MindGate.Core` implements the shared rule model, runtime validation, and platform-independent usage-budget state machine. The Windows client has Dashboard, My Apps, Analytics, and Settings sections, MindGate’s app categories, daily limits, on-device usage tracking, warning notifications, and a block notice when a selected app reaches its limit. Analytics currently shows the active cycle; weekly history is not stored yet. Closing the window hides MindGate in the system tray so monitoring continues; double-click the tray icon to reopen it, or choose **Exit MindGate** to quit.
 
+The Windows interface is currently **C# WinForms**, not HTML/CSS/JavaScript. The browser prototype is a visual reference; its dashboard layout is being translated into the Windows client while the rule engine and enforcement stay in C#.
+
 From the repository root, run the Windows prototype with:
 
 ```powershell
