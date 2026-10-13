@@ -1,4 +1,4 @@
-namespace AppStopper.WindowsClient;
+namespace MindGate.WindowsClient;
 
 internal sealed class BlockingForm : Form
 {
@@ -9,7 +9,7 @@ internal sealed class BlockingForm : Form
 
     internal BlockingForm()
     {
-        Text = "App Stopper";
+        Text = "MindGate";
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         TopMost = true;
@@ -55,7 +55,7 @@ internal sealed class BlockingForm : Form
 
         var settingsButton = new Button
         {
-            Text = "Open App Stopper settings",
+            Text = "Open MindGate settings",
             AutoSize = true,
             Anchor = AnchorStyles.None,
             Font = new Font("Segoe UI", 11, FontStyle.Regular),
@@ -70,7 +70,7 @@ internal sealed class BlockingForm : Form
 
         var disclosure = new Label
         {
-            Text = "This is a self-control aid. On a PC you administer, you can close App Stopper or change its settings.",
+            Text = "MindGate is a self-management aid. On a PC you administer, you can close the app or change its settings.",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.TopCenter,
             Font = new Font("Segoe UI", 9, FontStyle.Regular),

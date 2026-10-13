@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace AppStopper.Core;
+namespace MindGate.Core;
 
 /// <summary>
 /// Pure policy logic. A platform adapter supplies only foreground-use seconds and applies the returned block state.

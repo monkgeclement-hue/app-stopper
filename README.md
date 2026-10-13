@@ -1,6 +1,6 @@
-# App Stopper
+# MindGate
 
-App Stopper is a local-first self-management tool for setting time budgets on apps a person chooses. It warns as a budget runs low, blocks the selected app when the budget is used, and restores access at the configured reset time.
+MindGate is a local-first self-management tool for setting time budgets on apps a person chooses. It warns as a budget runs low, blocks the selected app when the budget is used, and restores access at the configured reset time.
 
 The project targets **Android, iOS/iPadOS, and Windows**. Each operating system needs its own native usage-monitoring and enforcement adapter; a web page alone cannot restrict other apps. The first version keeps rules and usage totals on the device and does not require an account or cloud service.
 
@@ -14,7 +14,7 @@ The project targets **Android, iOS/iPadOS, and Windows**. Each operating system 
 - Essential system functions are excluded, and the app explains every permission it requests.
 - Rules, counters, and reset state persist locally across restarts.
 
-App Stopper is a self-control aid, not a tamper-proof security product. A device owner may be able to disable or remove a self-management app, and enforcement strength differs by platform. See [platform feasibility](docs/platform-feasibility.md) before promising identical behavior everywhere.
+MindGate is a self-control aid, not a tamper-proof security product. A device owner may be able to disable or remove a self-management app, and enforcement strength differs by platform. See [platform feasibility](docs/platform-feasibility.md) before promising identical behavior everywhere.
 
 ## Repository layout
 
@@ -22,25 +22,25 @@ App Stopper is a self-control aid, not a tamper-proof security product. A device
 apps/
   android/       Kotlin client and Android enforcement adapter
   ios/           Swift client and Screen Time extensions
-  windows/       .NET desktop client and Windows adapter
+  windows/       MindGate.Core and the .NET MindGate.WindowsClient
 contracts/       Versioned, platform-neutral rule contract
 docs/            Product scope, architecture, platform notes, team workflow
 ```
 
 ## Development status
 
-The first Windows prototype is runnable. It lets a user select a running desktop app, set a daily foreground-use allowance and reset time, receive remaining-time warnings, and see a block notice at the limit. Rules and counters stay on the device. Android and iOS are currently at the platform-plan stage.
+The Windows prototype is runnable. Its MindGate-style dashboard includes Dashboard, My Apps, Analytics, and Settings sections; users can categorize monitored apps, set daily foreground-use allowances and reset times, receive warnings, and see a block notice at the limit. Rules and counters stay on the device. Android and iOS are currently at the platform-plan stage.
 
 Install the [.NET 10 SDK](https://learn.microsoft.com/dotnet/core/install/windows), then run the Windows prototype from the repository root:
 
 ```powershell
-dotnet run --project apps/windows/AppStopper.WindowsClient/AppStopper.WindowsClient.csproj
+dotnet run --project apps/windows/MindGate.WindowsClient/MindGate.WindowsClient.csproj
 ```
 
 Run the policy smoke checks with:
 
 ```powershell
-dotnet run --project apps/windows/tests/AppStopper.Core.SmokeTests/AppStopper.Core.SmokeTests.csproj
+dotnet run --project apps/windows/tests/MindGate.Core.SmokeTests/MindGate.Core.SmokeTests.csproj
 ```
 
 ## Documents

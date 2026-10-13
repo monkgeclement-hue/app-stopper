@@ -2,9 +2,9 @@
 
 ## Repository and branches
 
-The GitHub repository is being renamed to `app-stopper`. Keep `main` as the integration branch. The existing team branches remain `team/lephallo1` and `team/rexlesenyeho` during the scope migration so collaborators do not lose their branch references.
+The shared GitHub repository is `mindgate`. Keep `main` as the integration branch. GitHub redirects the previous repository URL, but each contributor should update the `origin` remote to `https://github.com/monkgeclement-hue/mindgate.git`. Keep feature work on contributor branches and merge it through focused pull requests; do not push directly to `main`.
 
-After the migration pull request is merged, each teammate should synchronize their local branch with the new `main` only after preserving any uncommitted or unpublished work. Continue to use focused pull requests into `main`; do not push directly to `main`.
+Before bringing `main` into an existing contributor branch, preserve any uncommitted or unpublished work. After merging a pull request, each teammate should fetch the updated `main` and merge it into their own branch before continuing platform work.
 
 ## Proposed module ownership
 

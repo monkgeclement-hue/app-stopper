@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace AppStopper.Core;
+namespace MindGate.Core;
 
 public sealed record AppRule
 {

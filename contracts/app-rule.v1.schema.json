@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:app-stopper:app-rule:v1",
-  "title": "App Stopper Rule v1",
+  "$id": "urn:mindgate:app-rule:v1",
+  "title": "MindGate App Rule v1",
   "description": "A local per-app usage allowance and reset policy. Platform selection references are device-local and must not be treated as portable identifiers.",
   "type": "object",
   "additionalProperties": false,

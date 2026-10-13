@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace AppStopper.Core;
+namespace MindGate.Core;
 
 public static class AppRuleValidator
 {

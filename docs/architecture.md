@@ -2,7 +2,7 @@
 
 ## Design
 
-App Stopper is a set of local clients, not a web service that controls devices remotely. Each client has a settings interface, a small policy engine, a local database, a platform usage adapter, and a platform enforcement adapter. The policy contract is shared as a specification; app selection tokens remain platform-specific and local to the device.
+MindGate is a set of local clients, not a web service that controls devices remotely. Each client has a settings interface, a small policy engine, a local database, a platform usage adapter, and a platform enforcement adapter. The policy contract is shared as a specification; app selection tokens remain platform-specific and local to the device.
 
 ```mermaid
 flowchart TB
