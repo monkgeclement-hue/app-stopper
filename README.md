@@ -29,9 +29,9 @@ docs/            Product scope, architecture, platform notes, team workflow
 
 ## Development status
 
-The Windows prototype is runnable. Its MindGate-style dashboard includes Dashboard, My Apps, Analytics, and Settings sections; users can categorize monitored apps, set daily foreground-use allowances and reset times, receive warnings, and see a block notice at the limit. Rules and counters stay on the device. Android and iOS are currently at the platform-plan stage.
+The Windows client is runnable. Users can categorize supported desktop apps, set daily foreground-use allowances and reset times, receive warnings, and see a blocking screen at the limit. Rules and counters stay on the device, and monitoring can optionally launch in the background at Windows sign-in. Android and iOS are currently at the platform-plan stage.
 
-Install the [.NET 10 SDK](https://learn.microsoft.com/dotnet/core/install/windows), then run the Windows prototype from the repository root:
+Install the [.NET 10 SDK](https://learn.microsoft.com/dotnet/core/install/windows), then run the Windows client from the repository root:
 
 ```powershell
 dotnet run --project apps/windows/MindGate.WindowsClient/MindGate.WindowsClient.csproj

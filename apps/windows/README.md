@@ -4,13 +4,13 @@ MindGate for Windows is built with **C#/.NET**. `MindGate.Core` implements the s
 
 The Windows interface is currently **C# WinForms**, not HTML/CSS/JavaScript. The browser prototype is a visual reference; its dashboard layout is being translated into the Windows client while the rule engine and enforcement stay in C#.
 
-From the repository root, run the Windows prototype with:
+From the repository root, run the Windows client with:
 
 ```powershell
 dotnet run --project apps/windows/MindGate.WindowsClient/MindGate.WindowsClient.csproj
 ```
 
-Rules and counters are stored in `%LOCALAPPDATA%\MindGate\windows-state.json`. Existing data in `%LOCALAPPDATA%\AppStopper\windows-state.json` is migrated on first launch after the rename. The app picker combines normal desktop apps found through Start Menu shortcuts with running desktop processes that have readable executable paths, so a user does not have to launch an app before configuring a limit. While an app is blocked, its rule cannot be removed and monitoring cannot be paused; those controls unlock at the scheduled reset. This is still an early desktop proof: the block notice is a user-mode overlay that can be bypassed by someone who administers the PC, for example by closing MindGate or changing its local state. Microsoft Store packaged apps, idle-time policy, startup recovery, and robust enforcement after the app is closed are not covered yet.
+Rules and counters are stored in `%LOCALAPPDATA%\MindGate\windows-state.json`. Existing data in `%LOCALAPPDATA%\AppStopper\windows-state.json` is migrated on first launch after the rename. The app picker combines normal desktop apps found through Start Menu shortcuts with running desktop processes that have readable executable paths, so a user does not have to launch an app before configuring a limit. In Settings, the user can optionally launch MindGate in the background at Windows sign-in; a single-instance guard avoids running two monitors against the same state file. While an app is blocked, its rule cannot be removed and monitoring cannot be paused; those controls unlock at the scheduled reset. The blocking screen is a user-mode overlay that can be bypassed by someone who administers the PC, for example by closing MindGate or changing its local state. Microsoft Store packaged apps, idle-time policy, and robust enforcement after MindGate or the target app is closed are not covered yet.
 
 Run the policy smoke checks with:
 

@@ -3,8 +3,10 @@ using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Text.Json;
 using Microsoft.CSharp.RuntimeBinder;
+using Microsoft.Win32;
 using MindGate.Core;
 
 namespace MindGate.WindowsClient;
@@ -15,6 +17,8 @@ internal sealed class DashboardForm : Form
     private static readonly Color PrimaryColor = Color.FromArgb(21, 151, 126);
     private static readonly Color TextColor = Color.FromArgb(28, 33, 39);
     private static readonly Color MutedColor = Color.FromArgb(137, 149, 160);
+    private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupValueName = "MindGate";
     private static readonly string[] AppCategories =
     [
         "Social", "Entertainment", "Web Browser", "Messaging", "Music", "Games",
@@ -45,6 +49,7 @@ internal sealed class DashboardForm : Form
     private readonly UsageMeter _usageMeter = new();
     private readonly Label _monitoringState = new();
     private readonly Button _settingsMonitorButton = new();
+    private readonly CheckBox _launchAtSignInCheckBox = new();
     private readonly Button _removeButton = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1_000 };
     private readonly NotifyIcon _notifyIcon;
@@ -57,14 +62,22 @@ internal sealed class DashboardForm : Form
     private bool _monitoring = true;
     private bool _stateAvailable = true;
     private bool _exitRequested;
+    private bool _startInBackground;
 
-    internal DashboardForm()
+    internal DashboardForm(bool startInBackground = false)
     {
+        _startInBackground = startInBackground;
         Text = "MindGate";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1_000, 680);
         Size = new Size(1_280, 820);
         Font = new Font("Segoe UI", 10, FontStyle.Regular);
+        if (_startInBackground)
+        {
+            ShowInTaskbar = false;
+            WindowState = FormWindowState.Minimized;
+            Opacity = 0;
+        }
 
         try
         {
@@ -100,6 +113,8 @@ internal sealed class DashboardForm : Form
         UpdateMonitorButton();
         UpdateStatus();
         FormClosing += OnFormClosing;
+        if (_startInBackground)
+            Shown += (_, _) => Hide();
     }
 
     private void BuildInterface()
@@ -735,7 +750,7 @@ internal sealed class DashboardForm : Form
 
     private void BuildSettingsPage()
     {
-        var page = CreatePageLayout(5);
+        var page = CreatePageLayout(6);
         page.Controls.Add(CreatePageHeader("Settings", "Make sure MindGate is monitoring the way you expect."), 0, 0);
         var monitoringCard = CreateCardPanel();
         monitoringCard.Dock = DockStyle.Top;
@@ -765,16 +780,116 @@ internal sealed class DashboardForm : Form
         monitoringCard.Controls.Add(monitoringLayout);
         page.Controls.Add(monitoringCard, 0, 1);
 
+        page.Controls.Add(CreateLaunchAtSignInCard(), 0, 2);
+
         var reminders = CreateInfoCard("Reminders", "MindGate warns at 30, 20, and 10 minutes remaining when those thresholds fit the chosen limit.");
         reminders.Dock = DockStyle.Top;
-        page.Controls.Add(reminders, 0, 2);
-        var privacy = CreateInfoCard("On-device data", "Your app rules and usage counters are saved locally. MindGate does not need an account or cloud service for this prototype.");
+        page.Controls.Add(reminders, 0, 3);
+        var privacy = CreateInfoCard("On-device data", "Your app rules and usage counters are saved locally. MindGate does not need an account or cloud service.");
         privacy.Dock = DockStyle.Top;
-        page.Controls.Add(privacy, 0, 3);
-        var enforcement = CreateInfoCard("About blocking", "Windows blocking is an early user-mode proof. A person who administers this PC can close MindGate or change its local files.");
+        page.Controls.Add(privacy, 0, 4);
+        var enforcement = CreateInfoCard("About blocking", "MindGate covers a limited app while it is in use. A person who administers this PC can close MindGate or change its local files.");
         enforcement.Dock = DockStyle.Top;
-        page.Controls.Add(enforcement, 0, 4);
+        page.Controls.Add(enforcement, 0, 5);
         AddPage("settings", page);
+    }
+
+    private Control CreateLaunchAtSignInCard()
+    {
+        var card = CreateCardPanel();
+        card.Dock = DockStyle.Top;
+        card.Padding = new Padding(18);
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Color.White,
+            AutoSize = true
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _launchAtSignInCheckBox.Text = "Launch MindGate when I sign in";
+        _launchAtSignInCheckBox.AutoSize = true;
+        _launchAtSignInCheckBox.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+        _launchAtSignInCheckBox.ForeColor = TextColor;
+        _launchAtSignInCheckBox.Margin = new Padding(0, 0, 0, 6);
+        try
+        {
+            _launchAtSignInCheckBox.Checked = IsLaunchAtSignInEnabled();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                           SecurityException)
+        {
+            _launchAtSignInCheckBox.Enabled = false;
+            _status.Text = $"Could not read the Windows sign-in setting: {exception.Message}";
+        }
+        _launchAtSignInCheckBox.CheckedChanged += OnLaunchAtSignInChanged;
+        content.Controls.Add(_launchAtSignInCheckBox, 0, 0);
+        content.Controls.Add(new Label
+        {
+            Text = "Start monitoring in the background after Windows sign-in. MindGate stays in the system tray.",
+            AutoSize = true,
+            MaximumSize = new Size(820, 0),
+            ForeColor = MutedColor,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            Margin = new Padding(24, 0, 0, 0)
+        }, 0, 1);
+        card.Controls.Add(content);
+        return card;
+    }
+
+    private static bool IsLaunchAtSignInEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, writable: false);
+        return key?.GetValue(StartupValueName) is string;
+    }
+
+    private void OnLaunchAtSignInChanged(object? sender, EventArgs e)
+    {
+        var enabled = _launchAtSignInCheckBox.Checked;
+        try
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(StartupRegistryPath, writable: true)
+                ?? throw new IOException("Could not open the current-user startup settings.");
+            if (enabled)
+            {
+                key.SetValue(StartupValueName, GetStartupCommand(), RegistryValueKind.String);
+                _status.Text = "MindGate will start in the system tray when you sign in to Windows.";
+            }
+            else
+            {
+                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
+                _status.Text = "MindGate will no longer start automatically when you sign in.";
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                           SecurityException or ArgumentException)
+        {
+            _launchAtSignInCheckBox.CheckedChanged -= OnLaunchAtSignInChanged;
+            _launchAtSignInCheckBox.Checked = !enabled;
+            _launchAtSignInCheckBox.CheckedChanged += OnLaunchAtSignInChanged;
+            MessageBox.Show(this, $"Could not update the Windows sign-in setting.\n\n{exception.Message}",
+                "MindGate startup setting", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static string GetStartupCommand()
+    {
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath))
+            throw new IOException("Could not determine the MindGate executable path.");
+
+        var entryAssemblyPath = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+        if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(entryAssemblyPath) && File.Exists(entryAssemblyPath))
+        {
+            return $"\"{processPath}\" \"{entryAssemblyPath}\" --background";
+        }
+
+        return $"\"{processPath}\" --background";
     }
 
     private static TableLayoutPanel CreatePageLayout(int rowCount)
@@ -1516,11 +1631,23 @@ internal sealed class DashboardForm : Form
     {
         _blockScreen.Hide();
         _blockedRuleId = null;
+        Opacity = 1;
+        ShowInTaskbar = true;
         Show();
         WindowState = FormWindowState.Normal;
         BringToFront();
         Activate();
         ShowPage("settings");
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        if (message.Msg == 0x8000 + 42)
+        {
+            OpenSettings();
+            return;
+        }
+        base.WndProc(ref message);
     }
 
     private void ExitApplication()
