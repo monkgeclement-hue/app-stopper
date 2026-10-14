@@ -1,7 +1,9 @@
 # MindGate Project Status
 
-Last updated: 2026-10-14  
-Code baseline: `845ef56` on `codex/mindgate-reference-dashboard`  
+Last updated: 2026-10-14
+
+Code baseline: `845ef56` on `codex/mindgate-reference-dashboard`
+
 Integration: [PR #4](https://github.com/monkgeclement-hue/mindgate/pull/4) is open; these changes are on the feature branch, not yet merged to `main`.
 
 ## Where we are
