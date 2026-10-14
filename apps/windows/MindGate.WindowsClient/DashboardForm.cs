@@ -1,17 +1,24 @@
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security;
 using System.Text.Json;
+using Microsoft.CSharp.RuntimeBinder;
+using Microsoft.Win32;
 using MindGate.Core;
 
 namespace MindGate.WindowsClient;
 
 internal sealed class DashboardForm : Form
 {
-    private static readonly Color CanvasColor = Color.FromArgb(247, 248, 252);
-    private static readonly Color SidebarColor = Color.FromArgb(29, 31, 66);
-    private static readonly Color PrimaryColor = Color.FromArgb(94, 86, 211);
-    private static readonly Color TextColor = Color.FromArgb(35, 39, 65);
-    private static readonly Color MutedColor = Color.FromArgb(111, 118, 143);
+    private static readonly Color CanvasColor = Color.FromArgb(246, 248, 249);
+    private static readonly Color PrimaryColor = Color.FromArgb(21, 151, 126);
+    private static readonly Color TextColor = Color.FromArgb(28, 33, 39);
+    private static readonly Color MutedColor = Color.FromArgb(137, 149, 160);
+    private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupValueName = "MindGate";
     private static readonly string[] AppCategories =
     [
         "Social", "Entertainment", "Web Browser", "Messaging", "Music", "Games",
@@ -19,11 +26,11 @@ internal sealed class DashboardForm : Form
     ];
 
     private readonly LocalStateStore _store = new();
+    private readonly UsageTrackingPreferencesStore _preferencesStore = new();
     private readonly List<TrackedRule> _rules;
     private readonly Panel _pageHost = new();
     private readonly Dictionary<string, Panel> _pages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Button> _navigationButtons = new(StringComparer.Ordinal);
-    private readonly FlowLayoutPanel _dashboardApps = new();
     private readonly FlowLayoutPanel _analyticsRows = new();
     private readonly ComboBox _applicationPicker = new();
     private readonly ComboBox _categoryPicker = new();
@@ -32,15 +39,21 @@ internal sealed class DashboardForm : Form
     private readonly DateTimePicker _dailyResetTime = new();
     private readonly ListView _rulesView = new();
     private readonly Label _emptyRulesHint = new();
-    private readonly Label _dashboardEmptyHint = new();
     private readonly Label _analyticsEmptyHint = new();
     private readonly Label _status = new();
-    private readonly Label _trackedAppsValue = new();
     private readonly Label _usedTodayValue = new();
-    private readonly Label _remainingValue = new();
+    private readonly Label _todayLimitValue = new();
+    private readonly Label _withinLimitValue = new();
+    private readonly Label _activeAppsValue = new();
+    private readonly Label _blockedAppsValue = new();
+    private readonly UsageRing _usageRing = new();
+    private readonly UsageMeter _usageMeter = new();
     private readonly Label _monitoringState = new();
-    private readonly Button _monitorButton = new();
     private readonly Button _settingsMonitorButton = new();
+    private readonly CheckBox _launchAtSignInCheckBox = new();
+    private readonly CheckBox _ignoreIdleTimeCheckBox = new();
+    private readonly NumericUpDown _idleThresholdMinutes = new();
+    private readonly Label _idleSettingsStatus = new();
     private readonly Button _removeButton = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1_000 };
     private readonly NotifyIcon _notifyIcon;
@@ -49,18 +62,28 @@ internal sealed class DashboardForm : Form
     private DateTimeOffset _lastSampleUtc = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastSaveUtc = DateTimeOffset.UtcNow;
     private double _fractionalSeconds;
+    private UsageTrackingPreferences _usagePreferences = new();
     private string? _blockedRuleId;
     private bool _monitoring = true;
     private bool _stateAvailable = true;
     private bool _exitRequested;
+    private bool _startInBackground;
+    private bool _updatingIdleControls;
 
-    internal DashboardForm()
+    internal DashboardForm(bool startInBackground = false)
     {
+        _startInBackground = startInBackground;
         Text = "MindGate";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1_000, 680);
         Size = new Size(1_280, 820);
         Font = new Font("Segoe UI", 10, FontStyle.Regular);
+        if (_startInBackground)
+        {
+            ShowInTaskbar = false;
+            WindowState = FormWindowState.Minimized;
+            Opacity = 0;
+        }
 
         try
         {
@@ -72,6 +95,16 @@ internal sealed class DashboardForm : Form
             _rules = [];
             _stateAvailable = false;
             _monitoring = false;
+        }
+
+        try
+        {
+            _usagePreferences = _preferencesStore.Load();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                           ArgumentException or JsonException or SecurityException)
+        {
+            _idleSettingsStatus.Text = "The saved idle setting could not be read. Idle detection is off until you save a new setting.";
         }
 
         _notifyIcon = new NotifyIcon
@@ -96,6 +129,8 @@ internal sealed class DashboardForm : Form
         UpdateMonitorButton();
         UpdateStatus();
         FormClosing += OnFormClosing;
+        if (_startInBackground)
+            Shown += (_, _) => Hide();
     }
 
     private void BuildInterface()
@@ -103,38 +138,27 @@ internal sealed class DashboardForm : Form
         var shell = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
+            ColumnCount = 1,
+            RowCount = 3,
             BackColor = CanvasColor,
             Margin = new Padding(0)
         };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 228));
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        shell.Controls.Add(BuildSidebar(), 0, 0);
-
-        var content = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            BackColor = CanvasColor,
-            Margin = new Padding(0)
-        };
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
         _pageHost.Dock = DockStyle.Fill;
         _pageHost.BackColor = CanvasColor;
-        content.Controls.Add(_pageHost, 0, 0);
+        shell.Controls.Add(_pageHost, 0, 0);
 
         _status.Dock = DockStyle.Fill;
         _status.AutoSize = true;
-        _status.Padding = new Padding(28, 10, 28, 10);
+        _status.Padding = new Padding(30, 4, 30, 4);
         _status.ForeColor = MutedColor;
-        _status.BackColor = Color.White;
-        content.Controls.Add(_status, 0, 1);
-        shell.Controls.Add(content, 1, 0);
+        _status.BackColor = CanvasColor;
+        _status.Font = new Font("Segoe UI", 8, FontStyle.Regular);
+        shell.Controls.Add(_status, 0, 1);
+        shell.Controls.Add(BuildBottomNavigation(), 0, 2);
         Controls.Add(shell);
 
         BuildDashboardPage();
@@ -144,179 +168,423 @@ internal sealed class DashboardForm : Form
         ShowPage("dashboard");
     }
 
-    private Panel BuildSidebar()
+    private Control BuildBottomNavigation()
     {
-        var sidebar = new Panel { Dock = DockStyle.Fill, BackColor = SidebarColor };
+        var navigation = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            BackColor = Color.White,
+            Padding = new Padding(18, 4, 18, 4),
+            Margin = new Padding(0)
+        };
+        for (var column = 0; column < 4; column++)
+            navigation.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        navigation.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        foreach (var item in new[]
+                 {
+                     (Key: "dashboard", Title: "Dashboard", Icon: "▦"),
+                     (Key: "apps", Title: "Apps", Icon: "▣"),
+                     (Key: "analytics", Title: "Analytics", Icon: "▥"),
+                     (Key: "settings", Title: "Settings", Icon: "⚙")
+                 })
+        {
+            var button = new Button
+            {
+                Text = $"{item.Icon}\n{item.Title}",
+                Dock = DockStyle.Fill,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.White,
+                ForeColor = MutedColor,
+                Font = new Font("Segoe UI", 9, FontStyle.Regular),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Cursor = Cursors.Hand,
+                Margin = new Padding(4, 0, 4, 0),
+                UseVisualStyleBackColor = false
+            };
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(245, 250, 249);
+            button.Click += (_, _) => ShowPage(item.Key);
+            _navigationButtons.Add(item.Key, button);
+            navigation.Controls.Add(button);
+        }
+        return navigation;
+    }
+
+    private void BuildDashboardPage()
+    {
+        var page = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            ColumnCount = 1,
+            RowCount = 7,
+            Padding = new Padding(30, 22, 30, 18),
+            BackColor = CanvasColor,
+            Margin = new Padding(0)
+        };
+        page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        page.RowStyles.Add(new RowStyle(SizeType.Absolute, 174));
+        page.RowStyles.Add(new RowStyle(SizeType.Absolute, 136));
+        page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        page.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
+        page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        page.RowStyles.Add(new RowStyle(SizeType.Absolute, 158));
+
+        page.Controls.Add(CreateGreetingHeader(), 0, 0);
+        page.Controls.Add(CreateTodaySummaryCard(), 0, 1);
+
+        var statusMetrics = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = CanvasColor,
+            Margin = new Padding(0, 10, 0, 12)
+        };
+        for (var column = 0; column < statusMetrics.ColumnCount; column++)
+            statusMetrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / statusMetrics.ColumnCount));
+        statusMetrics.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        statusMetrics.Controls.Add(CreateStatusMetricCard("✓", "Within Limit", _withinLimitValue,
+            Color.FromArgb(22, 154, 76), Color.FromArgb(231, 248, 237)), 0, 0);
+        statusMetrics.Controls.Add(CreateStatusMetricCard("◷", "Active", _activeAppsValue,
+            Color.FromArgb(224, 126, 0), Color.FromArgb(255, 245, 230)), 1, 0);
+        statusMetrics.Controls.Add(CreateStatusMetricCard("▣", "Blocked", _blockedAppsValue,
+            Color.FromArgb(225, 54, 54), Color.FromArgb(255, 235, 235), last: true), 2, 0);
+        page.Controls.Add(statusMetrics, 0, 2);
+
+        page.Controls.Add(CreateDashboardSectionTitle("🔥  Streak"), 0, 3);
+        page.Controls.Add(CreateStreakCard(), 0, 4);
+        page.Controls.Add(CreateDashboardSectionTitle("⚡  Quick Actions"), 0, 5);
+
+        var actions = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = CanvasColor,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        for (var column = 0; column < actions.ColumnCount; column++)
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / actions.ColumnCount));
+        actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        actions.Controls.Add(CreateQuickActionCard("ϟ", "Focus Mode", "Choose apps to limit",
+            () => ShowPage("apps"), Color.FromArgb(20, 157, 137), Color.FromArgb(229, 248, 244)), 0, 0);
+        actions.Controls.Add(CreateQuickActionCard("☾", "Bedtime", "Review monitoring settings",
+            () => ShowPage("settings"), Color.FromArgb(70, 101, 157), Color.FromArgb(238, 242, 249)), 1, 0);
+        actions.Controls.Add(CreateQuickActionCard("＋", "Add App", "Monitor another app",
+            () =>
+            {
+                ShowPage("apps");
+                _applicationPicker.Focus();
+            }, Color.FromArgb(216, 132, 0), Color.FromArgb(255, 247, 229), last: true), 2, 0);
+        page.Controls.Add(actions, 0, 6);
+        AddPage("dashboard", page);
+    }
+
+    private static Control CreateGreetingHeader()
+    {
+        var header = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 14),
+            BackColor = CanvasColor
+        };
+        header.Controls.Add(new Label
+        {
+            Text = "Good day",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 22, FontStyle.Bold),
+            ForeColor = TextColor,
+            Margin = new Padding(0, 0, 0, 2)
+        });
+        header.Controls.Add(new Label
+        {
+            Text = DateTime.Now.ToString("dddd, MMMM d", CultureInfo.CurrentCulture),
+            AutoSize = true,
+            ForeColor = MutedColor,
+            Font = new Font("Segoe UI", 10, FontStyle.Regular),
+            Margin = new Padding(0)
+        });
+        return header;
+    }
+
+    private Control CreateTodaySummaryCard()
+    {
+        var card = CreateCardPanel();
+        card.Dock = DockStyle.Fill;
+        card.Margin = new Padding(0, 0, 0, 8);
+        card.Padding = new Padding(24, 17, 24, 15);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.White,
+            Margin = new Padding(0)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 102));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var details = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            BackColor = Color.White,
+            Margin = new Padding(0)
+        };
+        details.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        details.Controls.Add(new Label
+        {
+            Text = "Total Screen Time Today",
+            AutoSize = true,
+            ForeColor = MutedColor,
+            Font = new Font("Segoe UI", 10, FontStyle.Regular),
+            Margin = new Padding(0, 0, 0, 2)
+        }, 0, 0);
+        _usedTodayValue.AutoSize = true;
+        _usedTodayValue.ForeColor = TextColor;
+        _usedTodayValue.Font = new Font("Segoe UI", 28, FontStyle.Bold);
+        _usedTodayValue.Margin = new Padding(0, 0, 0, 0);
+        details.Controls.Add(_usedTodayValue, 0, 1);
+        _todayLimitValue.AutoSize = true;
+        _todayLimitValue.ForeColor = MutedColor;
+        _todayLimitValue.Font = new Font("Segoe UI", 10, FontStyle.Regular);
+        _todayLimitValue.Margin = new Padding(0, 0, 0, 9);
+        details.Controls.Add(_todayLimitValue, 0, 2);
+        _usageMeter.Dock = DockStyle.Fill;
+        _usageMeter.Height = 10;
+        _usageMeter.Margin = new Padding(0, 1, 0, 0);
+        details.Controls.Add(_usageMeter, 0, 3);
+
+        _usageRing.Dock = DockStyle.Fill;
+        _usageRing.Margin = new Padding(8, 0, 0, 0);
+        layout.Controls.Add(details, 0, 0);
+        layout.Controls.Add(_usageRing, 1, 0);
+        card.Controls.Add(layout);
+        return card;
+    }
+
+    private static Control CreateDashboardSectionTitle(string title)
+    {
+        return new Label
+        {
+            Text = title,
+            AutoSize = true,
+            Font = new Font("Segoe UI", 14, FontStyle.Bold),
+            ForeColor = TextColor,
+            Margin = new Padding(0, 5, 0, 2),
+            BackColor = CanvasColor
+        };
+    }
+
+    private static Control CreateStatusMetricCard(string icon, string title, Label value,
+        Color iconColor, Color iconBackground, bool last = false)
+    {
+        var card = CreateCardPanel();
+        card.Dock = DockStyle.Fill;
+        card.Margin = new Padding(0, 0, last ? 0 : 10, 0);
+        card.Padding = new Padding(8, 8, 8, 8);
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 3,
-            Padding = new Padding(18, 22, 14, 18),
-            BackColor = SidebarColor
+            BackColor = Color.White
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 33));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var brand = new FlowLayoutPanel
+        var badge = new Label
         {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            BackColor = SidebarColor,
+            Text = icon,
+            Width = 44,
+            Height = 44,
+            Anchor = AnchorStyles.None,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI Symbol", 17, FontStyle.Regular),
+            ForeColor = iconColor,
+            BackColor = iconBackground,
             Margin = new Padding(0)
         };
-        var mark = new Panel { Width = 38, Height = 38, BackColor = PrimaryColor, Margin = new Padding(0, 1, 10, 0) };
-        mark.Controls.Add(new Label
+        using (var badgePath = new GraphicsPath())
         {
-            Text = "M",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI", 17, FontStyle.Bold),
-            ForeColor = Color.White
-        });
-        brand.Controls.Add(mark);
-        brand.Controls.Add(new Label
+            badgePath.AddEllipse(0, 0, 44, 44);
+            badge.Region = new Region(badgePath);
+        }
+        layout.Controls.Add(badge, 0, 0);
+        value.AutoSize = true;
+        value.TextAlign = ContentAlignment.MiddleCenter;
+        value.Anchor = AnchorStyles.None;
+        value.ForeColor = TextColor;
+        value.Font = new Font("Segoe UI", 18, FontStyle.Bold);
+        value.Margin = new Padding(0);
+        layout.Controls.Add(value, 0, 1);
+        layout.Controls.Add(new Label
         {
-            Text = "MindGate",
+            Text = title,
             AutoSize = true,
-            Font = new Font("Segoe UI", 17, FontStyle.Bold),
-            ForeColor = Color.White,
-            Margin = new Padding(0, 5, 0, 0)
-        });
-        layout.Controls.Add(brand, 0, 0);
+            Anchor = AnchorStyles.None,
+            TextAlign = ContentAlignment.TopCenter,
+            ForeColor = MutedColor,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            Margin = new Padding(0)
+        }, 0, 2);
+        card.Controls.Add(layout);
+        return card;
+    }
 
-        var navigation = new FlowLayoutPanel
+    private static Control CreateStreakCard()
+    {
+        var card = CreateCardPanel();
+        card.Dock = DockStyle.Fill;
+        card.Margin = new Padding(0, 0, 0, 4);
+        card.Padding = new Padding(20, 12, 20, 12);
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.White
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var days = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            AutoScroll = true,
-            BackColor = SidebarColor,
-            Margin = new Padding(0, 14, 0, 0)
+            BackColor = Color.White,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
         };
-        foreach (var item in new[]
-                 {
-                     (Key: "dashboard", Title: "Dashboard"),
-                     (Key: "apps", Title: "My Apps"),
-                     (Key: "analytics", Title: "Analytics"),
-                     (Key: "settings", Title: "Settings")
-                 })
+        days.Controls.Add(new Label
         {
-            var button = new Button
-            {
-                Text = item.Title,
-                Width = 194,
-                Height = 44,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(14, 0, 0, 0),
-                Font = new Font("Segoe UI", 10, FontStyle.Regular),
-                FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.FromArgb(222, 224, 242),
-                BackColor = SidebarColor,
-                Margin = new Padding(0, 0, 0, 7),
-                Cursor = Cursors.Hand
-            };
-            button.FlatAppearance.BorderSize = 0;
-            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(43, 45, 91);
-            button.Click += (_, _) => ShowPage(item.Key);
-            _navigationButtons.Add(item.Key, button);
-            navigation.Controls.Add(button);
-        }
-        layout.Controls.Add(navigation, 0, 1);
-
-        layout.Controls.Add(new Label
-        {
-            Text = "Your rules stay on this device.",
+            Text = "0",
             AutoSize = true,
-            MaximumSize = new Size(188, 0),
-            ForeColor = Color.FromArgb(174, 178, 205),
+            Font = new Font("Segoe UI", 28, FontStyle.Bold),
+            ForeColor = Color.FromArgb(239, 154, 0),
+            Margin = new Padding(0)
+        });
+        days.Controls.Add(new Label
+        {
+            Text = "days",
+            AutoSize = true,
             Font = new Font("Segoe UI", 8, FontStyle.Regular),
-            Margin = new Padding(0, 12, 0, 0)
-        }, 0, 2);
-        sidebar.Controls.Add(layout);
-        return sidebar;
+            ForeColor = MutedColor,
+            Margin = new Padding(0, -2, 0, 0)
+        });
+        layout.Controls.Add(days, 0, 0);
+        var copy = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = Color.White,
+            Padding = new Padding(0, 12, 0, 0),
+            Margin = new Padding(0)
+        };
+        copy.Controls.Add(new Label
+        {
+            Text = "Longest streak: 0 days",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 10, FontStyle.Regular),
+            ForeColor = MutedColor,
+            Margin = new Padding(0, 0, 0, 3)
+        });
+        copy.Controls.Add(new Label
+        {
+            Text = "Start your streak today",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            ForeColor = MutedColor,
+            Margin = new Padding(0)
+        });
+        layout.Controls.Add(copy, 1, 0);
+        card.Controls.Add(layout);
+        return card;
     }
 
-    private void BuildDashboardPage()
+    private static Control CreateQuickActionCard(string icon, string title, string caption, Action onClick,
+        Color iconColor, Color iconBackground, bool last = false)
     {
-        var page = CreatePageLayout(5);
-        page.Controls.Add(CreatePageHeader("Dashboard", "A clear view of the time you’ve set aside."), 0, 0);
-
-        var summary = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            ColumnCount = 3,
-            RowCount = 1,
-            Height = 104,
-            BackColor = CanvasColor,
-            Margin = new Padding(0, 0, 0, 18)
-        };
-        for (var column = 0; column < summary.ColumnCount; column++)
-            summary.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / summary.ColumnCount));
-        summary.Controls.Add(CreateMetricCard("Apps with limits", _trackedAppsValue), 0, 0);
-        summary.Controls.Add(CreateMetricCard("Used this cycle", _usedTodayValue), 1, 0);
-        summary.Controls.Add(CreateMetricCard("Allowance left across apps", _remainingValue, last: true), 2, 0);
-        page.Controls.Add(summary, 0, 1);
-
-        var quickActions = CreateCardPanel();
-        quickActions.Height = 132;
-        quickActions.Dock = DockStyle.Top;
-        var actionLayout = new TableLayoutPanel
+        var card = CreateCardPanel();
+        card.Dock = DockStyle.Fill;
+        card.Margin = new Padding(0, 0, last ? 0 : 10, 0);
+        card.Padding = new Padding(8, 12, 8, 8);
+        card.Cursor = Cursors.Hand;
+        var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
-            Padding = new Padding(17),
-            BackColor = Color.White
+            RowCount = 3,
+            BackColor = Color.White,
+            Cursor = Cursors.Hand
         };
-        actionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        actionLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        actionLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        actionLayout.Controls.Add(CreateSectionTitle("Quick actions", "Small steps to keep your plan on track."), 0, 0);
-        var actionButtons = new FlowLayoutPanel
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var badge = new Label
         {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = true,
-            Padding = new Padding(0, 10, 0, 0),
-            BackColor = Color.White
+            Text = icon,
+            Width = 44,
+            Height = 44,
+            Anchor = AnchorStyles.None,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI Symbol", 19, FontStyle.Regular),
+            ForeColor = iconColor,
+            BackColor = iconBackground,
+            Margin = new Padding(0)
         };
-        var manageAppsButton = CreateStyledButton("Manage my apps", primary: true);
-        manageAppsButton.Click += (_, _) => ShowPage("apps");
-        var viewAnalyticsButton = CreateStyledButton("View usage", primary: false);
-        viewAnalyticsButton.Click += (_, _) => ShowPage("analytics");
-        _monitorButton.AutoSize = true;
-        _monitorButton.Height = 38;
-        _monitorButton.Padding = new Padding(12, 3, 12, 3);
-        StyleButton(_monitorButton, primary: false);
-        _monitorButton.Click += (_, _) => ToggleMonitoring();
-        actionButtons.Controls.Add(manageAppsButton);
-        actionButtons.Controls.Add(viewAnalyticsButton);
-        actionButtons.Controls.Add(_monitorButton);
-        actionLayout.Controls.Add(actionButtons, 0, 1);
-        quickActions.Controls.Add(actionLayout);
-        page.Controls.Add(quickActions, 0, 2);
-
-        page.Controls.Add(CreateSectionTitle("Your apps", "See how each app is tracking against its limit."), 0, 3);
-        var appsCard = CreateCardPanel();
-        appsCard.Dock = DockStyle.Fill;
-        _dashboardApps.Dock = DockStyle.Fill;
-        _dashboardApps.AutoScroll = true;
-        _dashboardApps.WrapContents = true;
-        _dashboardApps.FlowDirection = FlowDirection.LeftToRight;
-        _dashboardApps.Padding = new Padding(12);
-        _dashboardApps.BackColor = Color.White;
-        _dashboardEmptyHint.AutoSize = true;
-        _dashboardEmptyHint.MaximumSize = new Size(760, 0);
-        _dashboardEmptyHint.Font = new Font("Segoe UI", 10, FontStyle.Regular);
-        _dashboardEmptyHint.ForeColor = MutedColor;
-        _dashboardEmptyHint.Margin = new Padding(4, 8, 4, 4);
-        appsCard.Controls.Add(_dashboardApps);
-        page.Controls.Add(appsCard, 0, 4);
-        AddPage("dashboard", page);
+        using (var badgePath = CreateRoundedPath(new Rectangle(0, 0, 44, 44), 12))
+            badge.Region = new Region(badgePath);
+        layout.Controls.Add(badge, 0, 0);
+        layout.Controls.Add(new Label
+        {
+            Text = title,
+            AutoSize = true,
+            Anchor = AnchorStyles.None,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            ForeColor = TextColor,
+            Margin = new Padding(0)
+        }, 0, 1);
+        layout.Controls.Add(new Label
+        {
+            Text = caption,
+            AutoSize = true,
+            Anchor = AnchorStyles.None,
+            TextAlign = ContentAlignment.TopCenter,
+            Font = new Font("Segoe UI", 8, FontStyle.Regular),
+            ForeColor = MutedColor,
+            Margin = new Padding(0)
+        }, 0, 2);
+        card.Controls.Add(layout);
+        void HandleClick(object? sender, EventArgs args) => onClick();
+        card.Click += HandleClick;
+        layout.Click += HandleClick;
+        foreach (Control child in layout.Controls)
+        {
+            child.Cursor = Cursors.Hand;
+            child.Click += HandleClick;
+        }
+        return card;
     }
 
     private void BuildAppsPage()
@@ -354,7 +622,8 @@ internal sealed class DashboardForm : Form
         setupLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         setupLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         setupLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        setupLayout.Controls.Add(CreateSectionTitle("Add an app", "The app must be open so MindGate can find it."), 0, 0);
+        setupLayout.Controls.Add(CreateSectionTitle(
+            "Add an app", "Choose a desktop app from Start or a currently running app. Microsoft Store apps are not supported yet."), 0, 0);
         var fields = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -434,7 +703,7 @@ internal sealed class DashboardForm : Form
         rulesLayout.Controls.Add(toolbar, 0, 0);
         var listPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.White };
         listPanel.Controls.Add(_rulesView);
-        _emptyRulesHint.Text = "No limits yet\nChoose a running app above to create your first daily limit.";
+        _emptyRulesHint.Text = "No limits yet\nChoose an app above to create your first daily limit.";
         _emptyRulesHint.Dock = DockStyle.Fill;
         _emptyRulesHint.TextAlign = ContentAlignment.MiddleCenter;
         _emptyRulesHint.Font = new Font("Segoe UI", 11, FontStyle.Regular);
@@ -497,7 +766,7 @@ internal sealed class DashboardForm : Form
 
     private void BuildSettingsPage()
     {
-        var page = CreatePageLayout(5);
+        var page = CreatePageLayout(7);
         page.Controls.Add(CreatePageHeader("Settings", "Make sure MindGate is monitoring the way you expect."), 0, 0);
         var monitoringCard = CreateCardPanel();
         monitoringCard.Dock = DockStyle.Top;
@@ -527,16 +796,213 @@ internal sealed class DashboardForm : Form
         monitoringCard.Controls.Add(monitoringLayout);
         page.Controls.Add(monitoringCard, 0, 1);
 
+        page.Controls.Add(CreateLaunchAtSignInCard(), 0, 2);
+
+        page.Controls.Add(CreateIdleTrackingCard(), 0, 3);
+
         var reminders = CreateInfoCard("Reminders", "MindGate warns at 30, 20, and 10 minutes remaining when those thresholds fit the chosen limit.");
         reminders.Dock = DockStyle.Top;
-        page.Controls.Add(reminders, 0, 2);
-        var privacy = CreateInfoCard("On-device data", "Your app rules and usage counters are saved locally. MindGate does not need an account or cloud service for this prototype.");
+        page.Controls.Add(reminders, 0, 4);
+        var privacy = CreateInfoCard("On-device data", "Your app rules and usage counters are saved locally. MindGate does not need an account or cloud service.");
         privacy.Dock = DockStyle.Top;
-        page.Controls.Add(privacy, 0, 3);
-        var enforcement = CreateInfoCard("About blocking", "Windows blocking is an early user-mode proof. A person who administers this PC can close MindGate or change its local files.");
+        page.Controls.Add(privacy, 0, 5);
+        var enforcement = CreateInfoCard("About blocking", "MindGate covers a limited app while it is in use. A person who administers this PC can close MindGate or change its local files.");
         enforcement.Dock = DockStyle.Top;
-        page.Controls.Add(enforcement, 0, 4);
+        page.Controls.Add(enforcement, 0, 6);
         AddPage("settings", page);
+    }
+
+    private Control CreateIdleTrackingCard()
+    {
+        var card = CreateCardPanel();
+        card.AutoSize = true;
+        card.Padding = new Padding(18);
+        var content = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            BackColor = Color.White
+        };
+        content.Controls.Add(CreateSectionTitle(
+            "Idle detection",
+            "Choose whether time should count while you are away from the keyboard or mouse."));
+
+        _ignoreIdleTimeCheckBox.Text = "Pause app-time counting when I have been idle for";
+        _ignoreIdleTimeCheckBox.AutoSize = true;
+        _ignoreIdleTimeCheckBox.Font = new Font("Segoe UI", 9, FontStyle.Regular);
+        _ignoreIdleTimeCheckBox.ForeColor = TextColor;
+        _ignoreIdleTimeCheckBox.Margin = new Padding(0, 12, 0, 4);
+        _idleThresholdMinutes.Minimum = 1;
+        _idleThresholdMinutes.Maximum = 60;
+        _idleThresholdMinutes.Width = 72;
+        _idleThresholdMinutes.Value = Math.Clamp(_usagePreferences.IdleThresholdMinutes, 1, 60);
+        _ignoreIdleTimeCheckBox.Checked = _usagePreferences.IgnoreUsageWhenIdle;
+        _idleThresholdMinutes.Enabled = _ignoreIdleTimeCheckBox.Checked;
+
+        var thresholdRow = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Color.White,
+            Margin = new Padding(0, 0, 0, 0)
+        };
+        thresholdRow.Controls.Add(_ignoreIdleTimeCheckBox);
+        thresholdRow.Controls.Add(_idleThresholdMinutes);
+        thresholdRow.Controls.Add(new Label
+        {
+            Text = "minutes",
+            AutoSize = true,
+            ForeColor = MutedColor,
+            Margin = new Padding(4, 7, 0, 0)
+        });
+        content.Controls.Add(thresholdRow);
+
+        _idleSettingsStatus.AutoSize = true;
+        _idleSettingsStatus.ForeColor = MutedColor;
+        _idleSettingsStatus.Font = new Font("Segoe UI", 8, FontStyle.Regular);
+        _idleSettingsStatus.Margin = new Padding(0, 6, 0, 0);
+        if (string.IsNullOrEmpty(_idleSettingsStatus.Text))
+            _idleSettingsStatus.Text = _usagePreferences.IgnoreUsageWhenIdle
+                ? $"Counting pauses after {_usagePreferences.IdleThresholdMinutes} minutes without input."
+                : "Off. Selected-app time is counted whenever the app is in the foreground.";
+        content.Controls.Add(_idleSettingsStatus);
+
+        _ignoreIdleTimeCheckBox.CheckedChanged += OnIdleTrackingSettingChanged;
+        _idleThresholdMinutes.ValueChanged += OnIdleTrackingSettingChanged;
+        card.Controls.Add(content);
+        return card;
+    }
+
+    private void OnIdleTrackingSettingChanged(object? sender, EventArgs e)
+    {
+        if (_updatingIdleControls)
+            return;
+
+        _idleThresholdMinutes.Enabled = _ignoreIdleTimeCheckBox.Checked;
+        var updatedPreferences = new UsageTrackingPreferences
+        {
+            IgnoreUsageWhenIdle = _ignoreIdleTimeCheckBox.Checked,
+            IdleThresholdMinutes = (int)_idleThresholdMinutes.Value
+        };
+
+        try
+        {
+            _preferencesStore.Save(updatedPreferences);
+            _usagePreferences = updatedPreferences;
+            _idleSettingsStatus.Text = updatedPreferences.IgnoreUsageWhenIdle
+                ? $"Counting pauses after {updatedPreferences.IdleThresholdMinutes} minutes without keyboard or mouse input."
+                : "Off. Selected-app time is counted whenever the app is in the foreground.";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            _updatingIdleControls = true;
+            _ignoreIdleTimeCheckBox.Checked = _usagePreferences.IgnoreUsageWhenIdle;
+            _idleThresholdMinutes.Value = Math.Clamp(_usagePreferences.IdleThresholdMinutes, 1, 60);
+            _idleThresholdMinutes.Enabled = _ignoreIdleTimeCheckBox.Checked;
+            _updatingIdleControls = false;
+            _idleSettingsStatus.Text = $"Could not save the idle setting. The previous setting remains active. {exception.Message}";
+        }
+    }
+
+    private Control CreateLaunchAtSignInCard()
+    {
+        var card = CreateCardPanel();
+        card.Dock = DockStyle.Top;
+        card.Padding = new Padding(18);
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Color.White,
+            AutoSize = true
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _launchAtSignInCheckBox.Text = "Launch MindGate when I sign in";
+        _launchAtSignInCheckBox.AutoSize = true;
+        _launchAtSignInCheckBox.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+        _launchAtSignInCheckBox.ForeColor = TextColor;
+        _launchAtSignInCheckBox.Margin = new Padding(0, 0, 0, 6);
+        try
+        {
+            _launchAtSignInCheckBox.Checked = IsLaunchAtSignInEnabled();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                           SecurityException)
+        {
+            _launchAtSignInCheckBox.Enabled = false;
+            _status.Text = $"Could not read the Windows sign-in setting: {exception.Message}";
+        }
+        _launchAtSignInCheckBox.CheckedChanged += OnLaunchAtSignInChanged;
+        content.Controls.Add(_launchAtSignInCheckBox, 0, 0);
+        content.Controls.Add(new Label
+        {
+            Text = "Start monitoring in the background after Windows sign-in. MindGate stays in the system tray.",
+            AutoSize = true,
+            MaximumSize = new Size(820, 0),
+            ForeColor = MutedColor,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            Margin = new Padding(24, 0, 0, 0)
+        }, 0, 1);
+        card.Controls.Add(content);
+        return card;
+    }
+
+    private static bool IsLaunchAtSignInEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, writable: false);
+        return key?.GetValue(StartupValueName) is string;
+    }
+
+    private void OnLaunchAtSignInChanged(object? sender, EventArgs e)
+    {
+        var enabled = _launchAtSignInCheckBox.Checked;
+        try
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(StartupRegistryPath, writable: true)
+                ?? throw new IOException("Could not open the current-user startup settings.");
+            if (enabled)
+            {
+                key.SetValue(StartupValueName, GetStartupCommand(), RegistryValueKind.String);
+                _status.Text = "MindGate will start in the system tray when you sign in to Windows.";
+            }
+            else
+            {
+                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
+                _status.Text = "MindGate will no longer start automatically when you sign in.";
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                           SecurityException or ArgumentException)
+        {
+            _launchAtSignInCheckBox.CheckedChanged -= OnLaunchAtSignInChanged;
+            _launchAtSignInCheckBox.Checked = !enabled;
+            _launchAtSignInCheckBox.CheckedChanged += OnLaunchAtSignInChanged;
+            MessageBox.Show(this, $"Could not update the Windows sign-in setting.\n\n{exception.Message}",
+                "MindGate startup setting", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static string GetStartupCommand()
+    {
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath))
+            throw new IOException("Could not determine the MindGate executable path.");
+
+        var entryAssemblyPath = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+        if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(entryAssemblyPath) && File.Exists(entryAssemblyPath))
+        {
+            return $"\"{processPath}\" \"{entryAssemblyPath}\" --background";
+        }
+
+        return $"\"{processPath}\" --background";
     }
 
     private static TableLayoutPanel CreatePageLayout(int rowCount)
@@ -617,44 +1083,9 @@ internal sealed class DashboardForm : Form
         return section;
     }
 
-    private static Panel CreateMetricCard(string title, Label value, bool last = false)
-    {
-        var card = CreateCardPanel();
-        card.Dock = DockStyle.Fill;
-        card.Height = 96;
-        card.Padding = new Padding(15, 12, 12, 10);
-        card.Margin = new Padding(0, 0, last ? 0 : 12, 0);
-        var content = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            BackColor = Color.White
-        };
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.Controls.Add(new Label
-        {
-            Text = title,
-            AutoSize = true,
-            ForeColor = MutedColor,
-            Font = new Font("Segoe UI", 9, FontStyle.Regular),
-            Margin = new Padding(0)
-        }, 0, 0);
-        value.AutoSize = true;
-        value.ForeColor = TextColor;
-        value.Font = new Font("Segoe UI", 21, FontStyle.Bold);
-        value.Margin = new Padding(0, 2, 0, 0);
-        content.Controls.Add(value, 0, 1);
-        card.Controls.Add(content);
-        return card;
-    }
-
-    private static Panel CreateCardPanel() => new()
+    private static Panel CreateCardPanel() => new RoundedCardPanel
     {
         BackColor = Color.White,
-        BorderStyle = BorderStyle.FixedSingle,
         Margin = new Padding(0, 0, 0, 16)
     };
 
@@ -768,34 +1199,14 @@ internal sealed class DashboardForm : Form
         foreach (var (navKey, button) in _navigationButtons)
         {
             var selected = navKey == key;
-            button.BackColor = selected ? Color.FromArgb(55, 57, 111) : SidebarColor;
-            button.ForeColor = selected ? Color.White : Color.FromArgb(222, 224, 242);
-            button.Font = new Font("Segoe UI", 10, selected ? FontStyle.Bold : FontStyle.Regular);
+            button.BackColor = selected ? Color.FromArgb(243, 250, 248) : Color.White;
+            button.ForeColor = selected ? PrimaryColor : MutedColor;
+            button.Font = new Font("Segoe UI", 9, selected ? FontStyle.Bold : FontStyle.Regular);
         }
     }
 
     private void RefreshUsagePanels()
     {
-        _dashboardApps.SuspendLayout();
-        _dashboardApps.Controls.Clear();
-        if (_rules.Count == 0)
-        {
-            _dashboardEmptyHint.Text = "No limits yet. Start by choosing an app you want to manage.";
-            _dashboardApps.Controls.Add(_dashboardEmptyHint);
-        }
-        else
-        {
-            var dashboardRules = _rules.Where(item => item.Rule.Enabled).Take(6).ToArray();
-            if (dashboardRules.Length == 0)
-            {
-                _dashboardEmptyHint.Text = "No active limits right now. Add an app limit from My Apps to start tracking.";
-                _dashboardApps.Controls.Add(_dashboardEmptyHint);
-            }
-            foreach (var tracked in dashboardRules)
-                _dashboardApps.Controls.Add(CreateUsageCard(tracked));
-        }
-        _dashboardApps.ResumeLayout();
-
         _analyticsRows.SuspendLayout();
         _analyticsRows.Controls.Clear();
         var enabledRules = _rules.Where(item => item.Rule.Enabled).ToArray();
@@ -806,56 +1217,6 @@ internal sealed class DashboardForm : Form
                 _analyticsRows.Controls.Add(CreateUsageRow(tracked));
         }
         _analyticsRows.ResumeLayout();
-    }
-
-    private static Control CreateUsageCard(TrackedRule tracked)
-    {
-        var card = CreateCardPanel();
-        card.Width = 222;
-        card.Height = 128;
-        card.Margin = new Padding(0, 0, 12, 12);
-        card.Padding = new Padding(13);
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4,
-            BackColor = Color.White
-        };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.Controls.Add(new Label
-        {
-            Text = tracked.Rule.Target.DisplayName,
-            AutoSize = true,
-            Font = new Font("Segoe UI", 10, FontStyle.Bold),
-            ForeColor = TextColor,
-            Margin = new Padding(0, 0, 0, 2)
-        }, 0, 0);
-        layout.Controls.Add(new Label
-        {
-            Text = tracked.Category,
-            AutoSize = true,
-            ForeColor = MutedColor,
-            Font = new Font("Segoe UI", 8, FontStyle.Regular),
-            Margin = new Padding(0)
-        }, 0, 1);
-        var progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100, Height = 8, Margin = new Padding(0, 8, 0, 6) };
-        progress.Value = GetUsagePercent(tracked);
-        layout.Controls.Add(progress, 0, 2);
-        layout.Controls.Add(new Label
-        {
-            Text = $"{FormatDuration(tracked.State.UsedSeconds)} of {FormatDuration(tracked.Rule.AllowanceSeconds)}",
-            AutoSize = true,
-            ForeColor = MutedColor,
-            Font = new Font("Segoe UI", 8, FontStyle.Regular),
-            Margin = new Padding(0)
-        }, 0, 3);
-        card.Controls.Add(layout);
-        return card;
     }
 
     private Control CreateUsageRow(TrackedRule tracked)
@@ -914,6 +1275,27 @@ internal sealed class DashboardForm : Form
             .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var apps = new Dictionary<string, RunningApplication>(StringComparer.OrdinalIgnoreCase);
 
+        foreach (var shortcutPath in GetStartMenuShortcuts())
+        {
+            var targetPath = ResolveShortcutTarget(shortcutPath);
+            if (string.IsNullOrWhiteSpace(targetPath))
+                continue;
+
+            try
+            {
+                targetPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(targetPath));
+                if (!File.Exists(targetPath) || targetPath.StartsWith(windowsDirectory, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var displayName = Path.GetFileNameWithoutExtension(shortcutPath);
+                apps.TryAdd(targetPath, new RunningApplication(displayName, targetPath));
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+            {
+                // Ignore malformed or stale Start Menu shortcuts.
+            }
+        }
+
         foreach (var process in Process.GetProcesses())
         {
             using (process)
@@ -948,6 +1330,69 @@ internal sealed class DashboardForm : Form
                 _applicationPicker.SelectedIndex = index;
                 break;
             }
+        }
+    }
+
+    private static IReadOnlyList<string> GetStartMenuShortcuts()
+    {
+        var shortcuts = new List<string>();
+        var folders = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu)
+        }.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var folder in folders)
+        {
+            if (!Directory.Exists(folder))
+                continue;
+            try
+            {
+                shortcuts.AddRange(Directory.EnumerateFiles(folder, "*.lnk", SearchOption.AllDirectories));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                               ArgumentException or NotSupportedException)
+            {
+                // Some Start Menu folders may be inaccessible; keep the apps discovered elsewhere.
+            }
+        }
+
+        return shortcuts;
+    }
+
+    private static string? ResolveShortcutTarget(string shortcutPath)
+    {
+        object? shell = null;
+        object? shortcut = null;
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType is null)
+                return null;
+
+            shell = Activator.CreateInstance(shellType);
+            if (shell is null)
+                return null;
+
+            dynamic shellAutomation = shell;
+            shortcut = shellAutomation.CreateShortcut(shortcutPath);
+            if (shortcut is null)
+                return null;
+
+            dynamic shortcutAutomation = shortcut;
+            return (string?)shortcutAutomation.TargetPath;
+        }
+        catch (Exception exception) when (exception is COMException or RuntimeBinderException or
+                                           TargetInvocationException or InvalidCastException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (shortcut is not null && Marshal.IsComObject(shortcut))
+                Marshal.ReleaseComObject(shortcut);
+            if (shell is not null && Marshal.IsComObject(shell))
+                Marshal.ReleaseComObject(shell);
         }
     }
 
@@ -1052,8 +1497,7 @@ internal sealed class DashboardForm : Form
 
     private void UpdateMonitorButton()
     {
-        _monitorButton.Text = _monitoring ? "Pause monitoring" : "Resume monitoring";
-        _settingsMonitorButton.Text = _monitorButton.Text;
+        _settingsMonitorButton.Text = _monitoring ? "Pause monitoring" : "Resume monitoring";
         _monitoringState.Text = _monitoring ? "Monitoring is active." : "Monitoring is paused.";
         UpdateGuardedControls();
     }
@@ -1070,6 +1514,11 @@ internal sealed class DashboardForm : Form
             _lastSampleUtc = now;
             if (elapsed < 0 || elapsed > 30)
                 elapsed = 0; // Do not charge a long pause or sleep as foreground use.
+
+            if (_usagePreferences.IgnoreUsageWhenIdle &&
+                ForegroundWindowReader.TryGetIdleDuration(out var idleDuration) &&
+                idleDuration >= TimeSpan.FromMinutes(_usagePreferences.IdleThresholdMinutes))
+                elapsed = 0;
 
             var foreground = ForegroundWindowReader.Read();
             var foregroundPath = foreground?.ExecutablePath;
@@ -1181,7 +1630,7 @@ internal sealed class DashboardForm : Form
         }
         _rulesView.EndUpdate();
         _emptyRulesHint.Text = _rules.Count == 0
-            ? "No limits yet\nChoose a running app above to create your first daily limit."
+            ? "No limits yet\nChoose an app above to create your first daily limit."
             : "No apps in this category yet. Choose another category or add a limit.";
         _emptyRulesHint.Visible = visibleRules.Length == 0;
         UpdateDashboardSummary();
@@ -1193,23 +1642,30 @@ internal sealed class DashboardForm : Form
     {
         var trackedRules = _rules.Where(item => item.Rule.Enabled).ToArray();
         var usedSeconds = trackedRules.Sum(item => (long)item.State.UsedSeconds);
-        var remainingSeconds = trackedRules.Sum(item =>
-            Math.Max(0, item.Rule.AllowanceSeconds - item.State.UsedSeconds));
+        var allowedSeconds = trackedRules.Sum(item => (long)item.Rule.AllowanceSeconds);
+        var now = DateTimeOffset.UtcNow;
+        var blockedCount = trackedRules.Count(item => IsCurrentlyBlocked(item, now));
+        var percentage = allowedSeconds <= 0
+            ? 0
+            : Math.Clamp((int)Math.Round(100d * usedSeconds / allowedSeconds), 0, 100);
 
-        _trackedAppsValue.Text = trackedRules.Length.ToString(CultureInfo.CurrentCulture);
-        _usedTodayValue.Text = FormatDuration((int)Math.Min(int.MaxValue, usedSeconds));
-        _remainingValue.Text = FormatDuration((int)Math.Min(int.MaxValue, remainingSeconds));
+        _usedTodayValue.Text = FormatCompactDuration((int)Math.Min(int.MaxValue, usedSeconds));
+        _todayLimitValue.Text = $"of {FormatCompactDuration((int)Math.Min(int.MaxValue, allowedSeconds))} daily limit";
+        _withinLimitValue.Text = (trackedRules.Length - blockedCount).ToString(CultureInfo.CurrentCulture);
+        _activeAppsValue.Text = trackedRules.Length.ToString(CultureInfo.CurrentCulture);
+        _blockedAppsValue.Text = blockedCount.ToString(CultureInfo.CurrentCulture);
+        _usageRing.Percent = percentage;
+        _usageMeter.Percent = percentage;
     }
 
     private void UpdateGuardedControls()
     {
-        if (_rulesView.IsDisposed || _removeButton.IsDisposed || _monitorButton.IsDisposed)
+        if (_rulesView.IsDisposed || _removeButton.IsDisposed || _settingsMonitorButton.IsDisposed)
             return;
 
         var now = DateTimeOffset.UtcNow;
         var activeBlock = HasActiveBlock(now);
         var canToggleMonitoring = _stateAvailable && (!_monitoring || !activeBlock);
-        _monitorButton.Enabled = canToggleMonitoring;
         _settingsMonitorButton.Enabled = canToggleMonitoring;
 
         var selectedId = _rulesView.SelectedItems.Count == 0
@@ -1260,6 +1716,14 @@ internal sealed class DashboardForm : Form
         return $"{duration.Seconds}s";
     }
 
+    private static string FormatCompactDuration(int seconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        if (duration.TotalHours >= 1)
+            return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        return $"{(int)duration.TotalMinutes}m";
+    }
+
     private static bool PathsEqual(string left, string right) =>
         string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
 
@@ -1285,11 +1749,23 @@ internal sealed class DashboardForm : Form
     {
         _blockScreen.Hide();
         _blockedRuleId = null;
+        Opacity = 1;
+        ShowInTaskbar = true;
         Show();
         WindowState = FormWindowState.Normal;
         BringToFront();
         Activate();
         ShowPage("settings");
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        if (message.Msg == 0x8000 + 42)
+        {
+            OpenSettings();
+            return;
+        }
+        base.WndProc(ref message);
     }
 
     private void ExitApplication()
@@ -1319,6 +1795,139 @@ internal sealed class DashboardForm : Form
         _notifyIcon.Dispose();
         _trayMenu.Dispose();
         _blockScreen.Dispose();
+    }
+
+    private sealed class RoundedCardPanel : Panel
+    {
+        public RoundedCardPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+        }
+
+        protected override void OnResize(EventArgs eventargs)
+        {
+            base.OnResize(eventargs);
+            if (Width < 2 || Height < 2)
+                return;
+            using var path = CreateRoundedPath(new Rectangle(0, 0, Width, Height), 17);
+            var previous = Region;
+            Region = new Region(path);
+            previous?.Dispose();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.Clear(Parent?.BackColor ?? CanvasColor);
+            using var path = CreateRoundedPath(new Rectangle(0, 0, Width - 1, Height - 1), 17);
+            using var fill = new SolidBrush(Color.White);
+            using var border = new Pen(Color.FromArgb(235, 239, 241));
+            e.Graphics.FillPath(fill, path);
+            e.Graphics.DrawPath(border, path);
+        }
+    }
+
+    private sealed class UsageRing : Control
+    {
+        private int _percent;
+
+        public UsageRing()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            BackColor = Color.White;
+        }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public int Percent
+        {
+            get => _percent;
+            set
+            {
+                var next = Math.Clamp(value, 0, 100);
+                if (_percent == next)
+                    return;
+                _percent = next;
+                Invalidate();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var diameter = Math.Max(36, Math.Min(ClientSize.Width, ClientSize.Height) - 14);
+            var bounds = new RectangleF(
+                (ClientSize.Width - diameter) / 2f,
+                (ClientSize.Height - diameter) / 2f,
+                diameter,
+                diameter);
+            using var track = new Pen(Color.FromArgb(190, 231, 223), 7);
+            using var progress = new Pen(PrimaryColor, 7);
+            e.Graphics.DrawArc(track, bounds, -90, 360);
+            if (_percent > 0)
+                e.Graphics.DrawArc(progress, bounds, -90, 3.6f * _percent);
+            using var font = new Font("Segoe UI", 12, FontStyle.Bold);
+            TextRenderer.DrawText(e.Graphics, $"{_percent}%", font, ClientRectangle,
+                Color.FromArgb(20, 145, 121), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    private sealed class UsageMeter : Control
+    {
+        private int _percent;
+
+        public UsageMeter()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            BackColor = Color.White;
+        }
+
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public int Percent
+        {
+            get => _percent;
+            set
+            {
+                var next = Math.Clamp(value, 0, 100);
+                if (_percent == next)
+                    return;
+                _percent = next;
+                Invalidate();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var height = Math.Min(10, Math.Max(5, ClientSize.Height - 2));
+            var track = new RectangleF(0, (ClientSize.Height - height) / 2f, ClientSize.Width, height);
+            using var trackPath = CreateRoundedPath(Rectangle.Round(track), height / 2);
+            using var trackBrush = new SolidBrush(Color.FromArgb(235, 240, 242));
+            e.Graphics.FillPath(trackBrush, trackPath);
+            if (_percent <= 0 || track.Width <= 0)
+                return;
+            var fill = track;
+            fill.Width = Math.Max(height, track.Width * _percent / 100f);
+            using var fillPath = CreateRoundedPath(Rectangle.Round(fill), height / 2);
+            using var fillBrush = new SolidBrush(PrimaryColor);
+            e.Graphics.FillPath(fillBrush, fillPath);
+        }
+    }
+
+    private static GraphicsPath CreateRoundedPath(Rectangle bounds, int radius)
+    {
+        var path = new GraphicsPath();
+        var diameter = Math.Max(1, Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height)));
+        path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     private sealed record RunningApplication(string Name, string ExecutablePath)
