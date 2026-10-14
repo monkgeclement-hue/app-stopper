@@ -26,6 +26,7 @@ internal sealed class DashboardForm : Form
     ];
 
     private readonly LocalStateStore _store = new();
+    private readonly UsageTrackingPreferencesStore _preferencesStore = new();
     private readonly List<TrackedRule> _rules;
     private readonly Panel _pageHost = new();
     private readonly Dictionary<string, Panel> _pages = new(StringComparer.Ordinal);
@@ -50,6 +51,9 @@ internal sealed class DashboardForm : Form
     private readonly Label _monitoringState = new();
     private readonly Button _settingsMonitorButton = new();
     private readonly CheckBox _launchAtSignInCheckBox = new();
+    private readonly CheckBox _ignoreIdleTimeCheckBox = new();
+    private readonly NumericUpDown _idleThresholdMinutes = new();
+    private readonly Label _idleSettingsStatus = new();
     private readonly Button _removeButton = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1_000 };
     private readonly NotifyIcon _notifyIcon;
@@ -58,11 +62,13 @@ internal sealed class DashboardForm : Form
     private DateTimeOffset _lastSampleUtc = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastSaveUtc = DateTimeOffset.UtcNow;
     private double _fractionalSeconds;
+    private UsageTrackingPreferences _usagePreferences = new();
     private string? _blockedRuleId;
     private bool _monitoring = true;
     private bool _stateAvailable = true;
     private bool _exitRequested;
     private bool _startInBackground;
+    private bool _updatingIdleControls;
 
     internal DashboardForm(bool startInBackground = false)
     {
@@ -89,6 +95,16 @@ internal sealed class DashboardForm : Form
             _rules = [];
             _stateAvailable = false;
             _monitoring = false;
+        }
+
+        try
+        {
+            _usagePreferences = _preferencesStore.Load();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                           ArgumentException or JsonException or SecurityException)
+        {
+            _idleSettingsStatus.Text = "The saved idle setting could not be read. Idle detection is off until you save a new setting.";
         }
 
         _notifyIcon = new NotifyIcon
@@ -750,7 +766,7 @@ internal sealed class DashboardForm : Form
 
     private void BuildSettingsPage()
     {
-        var page = CreatePageLayout(6);
+        var page = CreatePageLayout(7);
         page.Controls.Add(CreatePageHeader("Settings", "Make sure MindGate is monitoring the way you expect."), 0, 0);
         var monitoringCard = CreateCardPanel();
         monitoringCard.Dock = DockStyle.Top;
@@ -782,16 +798,113 @@ internal sealed class DashboardForm : Form
 
         page.Controls.Add(CreateLaunchAtSignInCard(), 0, 2);
 
+        page.Controls.Add(CreateIdleTrackingCard(), 0, 3);
+
         var reminders = CreateInfoCard("Reminders", "MindGate warns at 30, 20, and 10 minutes remaining when those thresholds fit the chosen limit.");
         reminders.Dock = DockStyle.Top;
-        page.Controls.Add(reminders, 0, 3);
+        page.Controls.Add(reminders, 0, 4);
         var privacy = CreateInfoCard("On-device data", "Your app rules and usage counters are saved locally. MindGate does not need an account or cloud service.");
         privacy.Dock = DockStyle.Top;
-        page.Controls.Add(privacy, 0, 4);
+        page.Controls.Add(privacy, 0, 5);
         var enforcement = CreateInfoCard("About blocking", "MindGate covers a limited app while it is in use. A person who administers this PC can close MindGate or change its local files.");
         enforcement.Dock = DockStyle.Top;
-        page.Controls.Add(enforcement, 0, 5);
+        page.Controls.Add(enforcement, 0, 6);
         AddPage("settings", page);
+    }
+
+    private Control CreateIdleTrackingCard()
+    {
+        var card = CreateCardPanel();
+        card.AutoSize = true;
+        card.Padding = new Padding(18);
+        var content = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            BackColor = Color.White
+        };
+        content.Controls.Add(CreateSectionTitle(
+            "Idle detection",
+            "Choose whether time should count while you are away from the keyboard or mouse."));
+
+        _ignoreIdleTimeCheckBox.Text = "Pause app-time counting when I have been idle for";
+        _ignoreIdleTimeCheckBox.AutoSize = true;
+        _ignoreIdleTimeCheckBox.Font = new Font("Segoe UI", 9, FontStyle.Regular);
+        _ignoreIdleTimeCheckBox.ForeColor = TextColor;
+        _ignoreIdleTimeCheckBox.Margin = new Padding(0, 12, 0, 4);
+        _idleThresholdMinutes.Minimum = 1;
+        _idleThresholdMinutes.Maximum = 60;
+        _idleThresholdMinutes.Width = 72;
+        _idleThresholdMinutes.Value = Math.Clamp(_usagePreferences.IdleThresholdMinutes, 1, 60);
+        _ignoreIdleTimeCheckBox.Checked = _usagePreferences.IgnoreUsageWhenIdle;
+        _idleThresholdMinutes.Enabled = _ignoreIdleTimeCheckBox.Checked;
+
+        var thresholdRow = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Color.White,
+            Margin = new Padding(0, 0, 0, 0)
+        };
+        thresholdRow.Controls.Add(_ignoreIdleTimeCheckBox);
+        thresholdRow.Controls.Add(_idleThresholdMinutes);
+        thresholdRow.Controls.Add(new Label
+        {
+            Text = "minutes",
+            AutoSize = true,
+            ForeColor = MutedColor,
+            Margin = new Padding(4, 7, 0, 0)
+        });
+        content.Controls.Add(thresholdRow);
+
+        _idleSettingsStatus.AutoSize = true;
+        _idleSettingsStatus.ForeColor = MutedColor;
+        _idleSettingsStatus.Font = new Font("Segoe UI", 8, FontStyle.Regular);
+        _idleSettingsStatus.Margin = new Padding(0, 6, 0, 0);
+        if (string.IsNullOrEmpty(_idleSettingsStatus.Text))
+            _idleSettingsStatus.Text = _usagePreferences.IgnoreUsageWhenIdle
+                ? $"Counting pauses after {_usagePreferences.IdleThresholdMinutes} minutes without input."
+                : "Off. Selected-app time is counted whenever the app is in the foreground.";
+        content.Controls.Add(_idleSettingsStatus);
+
+        _ignoreIdleTimeCheckBox.CheckedChanged += OnIdleTrackingSettingChanged;
+        _idleThresholdMinutes.ValueChanged += OnIdleTrackingSettingChanged;
+        card.Controls.Add(content);
+        return card;
+    }
+
+    private void OnIdleTrackingSettingChanged(object? sender, EventArgs e)
+    {
+        if (_updatingIdleControls)
+            return;
+
+        _idleThresholdMinutes.Enabled = _ignoreIdleTimeCheckBox.Checked;
+        var updatedPreferences = new UsageTrackingPreferences
+        {
+            IgnoreUsageWhenIdle = _ignoreIdleTimeCheckBox.Checked,
+            IdleThresholdMinutes = (int)_idleThresholdMinutes.Value
+        };
+
+        try
+        {
+            _preferencesStore.Save(updatedPreferences);
+            _usagePreferences = updatedPreferences;
+            _idleSettingsStatus.Text = updatedPreferences.IgnoreUsageWhenIdle
+                ? $"Counting pauses after {updatedPreferences.IdleThresholdMinutes} minutes without keyboard or mouse input."
+                : "Off. Selected-app time is counted whenever the app is in the foreground.";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            _updatingIdleControls = true;
+            _ignoreIdleTimeCheckBox.Checked = _usagePreferences.IgnoreUsageWhenIdle;
+            _idleThresholdMinutes.Value = Math.Clamp(_usagePreferences.IdleThresholdMinutes, 1, 60);
+            _idleThresholdMinutes.Enabled = _ignoreIdleTimeCheckBox.Checked;
+            _updatingIdleControls = false;
+            _idleSettingsStatus.Text = $"Could not save the idle setting. The previous setting remains active. {exception.Message}";
+        }
     }
 
     private Control CreateLaunchAtSignInCard()
@@ -1401,6 +1514,11 @@ internal sealed class DashboardForm : Form
             _lastSampleUtc = now;
             if (elapsed < 0 || elapsed > 30)
                 elapsed = 0; // Do not charge a long pause or sleep as foreground use.
+
+            if (_usagePreferences.IgnoreUsageWhenIdle &&
+                ForegroundWindowReader.TryGetIdleDuration(out var idleDuration) &&
+                idleDuration >= TimeSpan.FromMinutes(_usagePreferences.IdleThresholdMinutes))
+                elapsed = 0;
 
             var foreground = ForegroundWindowReader.Read();
             var foregroundPath = foreground?.ExecutablePath;
