@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.CSharp.RuntimeBinder;
 using MindGate.Core;
 
 namespace MindGate.WindowsClient;
@@ -588,7 +591,8 @@ internal sealed class DashboardForm : Form
         setupLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         setupLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         setupLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        setupLayout.Controls.Add(CreateSectionTitle("Add an app", "The app must be open so MindGate can find it."), 0, 0);
+        setupLayout.Controls.Add(CreateSectionTitle(
+            "Add an app", "Choose a desktop app from Start or a currently running app. Microsoft Store apps are not supported yet."), 0, 0);
         var fields = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -668,7 +672,7 @@ internal sealed class DashboardForm : Form
         rulesLayout.Controls.Add(toolbar, 0, 0);
         var listPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.White };
         listPanel.Controls.Add(_rulesView);
-        _emptyRulesHint.Text = "No limits yet\nChoose a running app above to create your first daily limit.";
+        _emptyRulesHint.Text = "No limits yet\nChoose an app above to create your first daily limit.";
         _emptyRulesHint.Dock = DockStyle.Fill;
         _emptyRulesHint.TextAlign = ContentAlignment.MiddleCenter;
         _emptyRulesHint.Font = new Font("Segoe UI", 11, FontStyle.Regular);
@@ -1043,6 +1047,27 @@ internal sealed class DashboardForm : Form
             .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var apps = new Dictionary<string, RunningApplication>(StringComparer.OrdinalIgnoreCase);
 
+        foreach (var shortcutPath in GetStartMenuShortcuts())
+        {
+            var targetPath = ResolveShortcutTarget(shortcutPath);
+            if (string.IsNullOrWhiteSpace(targetPath))
+                continue;
+
+            try
+            {
+                targetPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(targetPath));
+                if (!File.Exists(targetPath) || targetPath.StartsWith(windowsDirectory, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var displayName = Path.GetFileNameWithoutExtension(shortcutPath);
+                apps.TryAdd(targetPath, new RunningApplication(displayName, targetPath));
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+            {
+                // Ignore malformed or stale Start Menu shortcuts.
+            }
+        }
+
         foreach (var process in Process.GetProcesses())
         {
             using (process)
@@ -1077,6 +1102,69 @@ internal sealed class DashboardForm : Form
                 _applicationPicker.SelectedIndex = index;
                 break;
             }
+        }
+    }
+
+    private static IReadOnlyList<string> GetStartMenuShortcuts()
+    {
+        var shortcuts = new List<string>();
+        var folders = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu)
+        }.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var folder in folders)
+        {
+            if (!Directory.Exists(folder))
+                continue;
+            try
+            {
+                shortcuts.AddRange(Directory.EnumerateFiles(folder, "*.lnk", SearchOption.AllDirectories));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                               ArgumentException or NotSupportedException)
+            {
+                // Some Start Menu folders may be inaccessible; keep the apps discovered elsewhere.
+            }
+        }
+
+        return shortcuts;
+    }
+
+    private static string? ResolveShortcutTarget(string shortcutPath)
+    {
+        object? shell = null;
+        object? shortcut = null;
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType is null)
+                return null;
+
+            shell = Activator.CreateInstance(shellType);
+            if (shell is null)
+                return null;
+
+            dynamic shellAutomation = shell;
+            shortcut = shellAutomation.CreateShortcut(shortcutPath);
+            if (shortcut is null)
+                return null;
+
+            dynamic shortcutAutomation = shortcut;
+            return (string?)shortcutAutomation.TargetPath;
+        }
+        catch (Exception exception) when (exception is COMException or RuntimeBinderException or
+                                           TargetInvocationException or InvalidCastException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (shortcut is not null && Marshal.IsComObject(shortcut))
+                Marshal.ReleaseComObject(shortcut);
+            if (shell is not null && Marshal.IsComObject(shell))
+                Marshal.ReleaseComObject(shell);
         }
     }
 
@@ -1309,7 +1397,7 @@ internal sealed class DashboardForm : Form
         }
         _rulesView.EndUpdate();
         _emptyRulesHint.Text = _rules.Count == 0
-            ? "No limits yet\nChoose a running app above to create your first daily limit."
+            ? "No limits yet\nChoose an app above to create your first daily limit."
             : "No apps in this category yet. Choose another category or add a limit.";
         _emptyRulesHint.Visible = visibleRules.Length == 0;
         UpdateDashboardSummary();

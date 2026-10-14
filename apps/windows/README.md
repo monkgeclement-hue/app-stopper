@@ -10,7 +10,7 @@ From the repository root, run the Windows prototype with:
 dotnet run --project apps/windows/MindGate.WindowsClient/MindGate.WindowsClient.csproj
 ```
 
-Rules and counters are stored in `%LOCALAPPDATA%\MindGate\windows-state.json`. Existing data in `%LOCALAPPDATA%\AppStopper\windows-state.json` is migrated on first launch after the rename. While an app is blocked, its rule cannot be removed and monitoring cannot be paused; those controls unlock at the scheduled reset. This is still an early desktop proof: the picker lists running desktop processes with readable executable paths, and the block notice is a user-mode overlay that can be bypassed by someone who administers the PC, for example by closing MindGate or changing its local state. Packaged Windows apps, idle-time policy, startup recovery, and robust enforcement after the app is closed are not covered yet.
+Rules and counters are stored in `%LOCALAPPDATA%\MindGate\windows-state.json`. Existing data in `%LOCALAPPDATA%\AppStopper\windows-state.json` is migrated on first launch after the rename. The app picker combines normal desktop apps found through Start Menu shortcuts with running desktop processes that have readable executable paths, so a user does not have to launch an app before configuring a limit. While an app is blocked, its rule cannot be removed and monitoring cannot be paused; those controls unlock at the scheduled reset. This is still an early desktop proof: the block notice is a user-mode overlay that can be bypassed by someone who administers the PC, for example by closing MindGate or changing its local state. Microsoft Store packaged apps, idle-time policy, startup recovery, and robust enforcement after the app is closed are not covered yet.
 
 Run the policy smoke checks with:
 
