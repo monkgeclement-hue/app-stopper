@@ -49,5 +49,6 @@ dotnet run --project apps/windows/tests/MindGate.Core.SmokeTests/MindGate.Core.S
 - [Architecture and runtime workflow](docs/architecture.md)
 - [Platform feasibility and constraints](docs/platform-feasibility.md)
 - [Team workflow and proposed ownership](docs/team-workflow.md)
+- [Current project status and next milestones](docs/PROJECT_STATUS.md)
 - [App rule v1 contract](contracts/app-rule.v1.schema.json)
 - [Example daily rule](examples/app-rule.daily.example.json)
